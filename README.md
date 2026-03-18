@@ -13,36 +13,89 @@ Minimal end-to-end web push proof-of-concept. Node/Express backend + React front
 - PWA manifest — installable to home screen
 - Works on desktop Chrome/Firefox, Android Chrome, and iOS Safari 16.4+
 
-## Quick start
+---
 
-```bash
-# .env will be created automatically on first run, but it must exist as a file
-# for Docker's volume mount to work correctly
-touch .env
-touch subscriptions.json
+## How Docker + GitHub deployment works
 
-docker compose up --build
+This project uses a standard pattern you'll use for all Docker apps:
+
+- **The code** lives on GitHub. You never manually copy files to the server.
+- **The server** clones from GitHub, then Docker builds and runs the app from those files.
+- **To deploy an update**: push your changes to GitHub on your dev machine, then pull and rebuild on the server. Two commands.
+
+```
+Your machine  →  GitHub  →  Server (git pull + docker compose up)
 ```
 
-The app is served at `http://localhost:3001`.
+> The only files that are NOT in GitHub are `.env` (holds secret keys) and `subscriptions.json`
+> (holds live data). These are created once on the server and never overwritten by git.
+
+---
+
+## First deploy on a new server
+
+```bash
+# 1. SSH into the server
+ssh user@your-server
+
+# 2. Go to where you keep Docker projects
+cd /docker-data
+
+# 3. Clone the repo — this downloads all the code
+sudo git clone https://github.com/GoodComputerGuy/vapid.git
+cd vapid
+
+# 4. Create the two files that git doesn't manage (just needs to exist, content is auto-generated)
+sudo touch .env subscriptions.json
+
+# 5. Build the Docker images and start the containers
+sudo docker compose up --build -d
+
+# The -d flag means "detached" — runs in the background
+# The --build flag means "rebuild the images from the code"
+```
+
+The backend generates VAPID keys on first run and writes them to `.env`. The app is running.
+
+---
+
+## Deploying updates
+
+Whenever you make code changes on your dev machine:
+
+```bash
+# On your dev machine — commit and push to GitHub
+git add .
+git commit -m "describe your change"
+git push
+
+# On the server — pull the new code and rebuild
+ssh user@your-server "cd /docker-data/vapid && sudo git pull && sudo docker compose up --build -d"
+```
+
+That's the entire update workflow. `git pull` downloads the new code; `docker compose up --build` rebuilds the images with it and restarts the containers.
+
+---
 
 ## Cloudflare tunnel (required for iOS)
 
-iOS Safari requires HTTPS to register a service worker. Point a tunnel at port `3001`:
+iOS Safari requires HTTPS to register a service worker. Point a Cloudflare tunnel at the app port:
 
 ```bash
-# Quick one-shot tunnel (no account needed)
+# Quick one-shot tunnel (no account needed, URL changes each time)
 cloudflared tunnel --url http://localhost:3001
 
-# Named tunnel
+# Named tunnel with a fixed domain (requires Cloudflare account)
 cloudflared tunnel run <your-tunnel-name>
 ```
 
-Set `PUBLIC_URL` in `.env` to your tunnel URL (logged by the backend):
+Set `PUBLIC_URL` in `.env` on the server to your tunnel URL (logged by the backend):
 
 ```
-PUBLIC_URL=https://your-tunnel.example.com
+PUBLIC_URL=https://vapid.yourdomain.com
 ```
+
+---
 
 ## Platform setup
 
@@ -52,16 +105,20 @@ PUBLIC_URL=https://your-tunnel.example.com
 | **Android** | Chrome | Open URL → Subscribe → Send |
 | **iOS** | Safari 16.4+ | Open URL → Share → Add to Home Screen → reopen from home screen → Subscribe |
 
-> Chrome on iOS does **not** support web push (WebKit restriction).
+> Chrome on iOS does **not** support web push (WebKit restriction, not specific to this app).
+
+---
 
 ## On-call toggle
 
-Each subscribed device shows an **On Call / Off Call** toggle. Only on-call devices receive notifications when Send is triggered. Toggle state is persisted — survives container restarts.
+Each subscribed device shows an **On Call / Off Call** toggle. Only on-call devices receive notifications when Send is triggered. Toggle state is persisted in `subscriptions.json` and survives container restarts.
 
-This pattern is designed to be reused in production apps. To adapt it:
+**To adapt this pattern for a production app:**
 - Rename Subscribe/Unsubscribe to match your domain language
 - Rename the toggle to "Go On Call / Go Off Call"
-- Optionally add a server-side schedule that auto-flips the `onCall` flag
+- Optionally add a server-side schedule that auto-flips the `onCall` flag on a rotation
+
+---
 
 ## API endpoints
 
@@ -75,18 +132,33 @@ This pattern is designed to be reused in production apps. To adapt it:
 | `POST` | `/api/test-notify` | `{ message? }` | Push to all on-call subscribers |
 | `GET` | `/api/status` | — | Subscriber + on-call counts |
 
-## Persistent files
+---
 
-Both files are volume-mounted into the backend container and survive rebuilds:
+## Useful Docker commands
 
-| File | Contents |
-|------|----------|
-| `.env` | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `PUBLIC_URL` |
-| `subscriptions.json` | Array of push subscription objects with `onCall` flag |
+```bash
+# See running containers
+docker compose ps
+
+# Watch live logs
+docker compose logs -f
+
+# Stop everything
+docker compose down
+
+# Rebuild and restart (after a code change)
+docker compose up --build -d
+
+# Restart without rebuilding (after a config change)
+docker compose restart
+```
+
+---
 
 ## Notes
 
 - Expired push endpoints (HTTP 410) are automatically pruned after a failed send
 - Subscriptions default to `onCall: true` when first registered
 - Custom notification tone is **not possible** via the Web Push API — sound is OS-controlled
-- iOS notification sound can be changed in iOS Settings → Notifications; Android in Settings → Apps → Chrome → Notifications
+  - Android: Settings → Apps → Chrome → Notifications → Sound
+  - iOS: system default, no per-app override possible
