@@ -1,0 +1,9 @@
+# Runtime data — generated on first run, not for version control
+.env
+subscriptions.json
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
